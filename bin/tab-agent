@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PORT="${TAB_AGENT_PORT:-7752}"
+LOG_FILE="$HOME/Library/Logs/tab-agent.log"
+PID_FILE="$ROOT/data/tab-agent.pid"
+BUN_BIN="${BUN_BIN:-$(command -v bun || echo /opt/homebrew/bin/bun)}"
+
+mkdir -p "$ROOT/data" "$HOME/Library/Logs"
+
+is_running() {
+  if [[ -f "$PID_FILE" ]]; then
+    local pid
+    pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+cmd_start() {
+  if is_running; then
+    echo "Tab-Agent daemon already running (PID $(cat "$PID_FILE")) on 127.0.0.1:$PORT"
+    return 0
+  fi
+  nohup "$BUN_BIN" run "$ROOT/daemon/server.ts" >> "$LOG_FILE" 2>&1 &
+  local pid=$!
+  echo "$pid" > "$PID_FILE"
+  for _ in $(seq 1 25); do
+    if curl -fsS "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
+      echo "Tab-Agent daemon started (PID $pid) on http://127.0.0.1:$PORT"
+      return 0
+    fi
+    sleep 0.15
+  done
+  echo "Tab-Agent daemon launched (PID $pid), still starting — check $LOG_FILE"
+}
+
+cmd_stop() {
+  if is_running; then
+    local pid
+    pid="$(cat "$PID_FILE")"
+    kill "$pid" 2>/dev/null || true
+    rm -f "$PID_FILE"
+    echo "Stopped Tab-Agent daemon (PID $pid)"
+  else
+    rm -f "$PID_FILE"
+    echo "Tab-Agent daemon is not running"
+  fi
+}
+
+cmd_status() {
+  if curl -fsS "http://127.0.0.1:$PORT/api/health" 2>/dev/null; then
+    echo ""
+  else
+    echo "Tab-Agent daemon is offline (127.0.0.1:$PORT)"
+    return 1
+  fi
+}
+
+cmd_install_mcp() {
+  if command -v agy >/dev/null 2>&1; then
+    agy mcp add tab-agent -- "$BUN_BIN" "$ROOT/daemon/mcp-tab-bridge.mjs"
+    echo "Registered tab-agent MCP server with agy."
+  else
+    echo "agy binary not found in PATH — skipped agy MCP registration."
+  fi
+}
+
+case "${1:-status}" in
+  start) cmd_start ;;
+  stop) cmd_stop ;;
+  reload|restart) cmd_stop; cmd_start ;;
+  status) cmd_status ;;
+  install-mcp) cmd_install_mcp ;;
+  *)
+    echo "Usage: bin/tab-agent {start|stop|reload|status|install-mcp}"
+    exit 1
+    ;;
+esac

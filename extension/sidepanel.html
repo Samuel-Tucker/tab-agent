@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tab-Agent</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <div class="app" id="app">
+    <!-- Row 1 + Row 2 Sticky Header (Direction A: Pigeon-Hole Vellum Strip) -->
+    <header class="topbar">
+      <div class="topbar-row row-primary">
+        <div class="title-wrap">
+          <span class="status-dot" id="status-dot" title="Daemon connection"></span>
+          <button type="button" class="chat-title-btn" id="chat-title-btn" title="Switch chat (⌘K)" aria-haspopup="dialog"><span class="title-text" id="chat-title-text">New Chat</span><span class="title-caret">▾</span></button>
+          <input type="text" class="chat-title-input hidden" id="chat-title-input" maxlength="120" aria-label="Rename chat" />
+          <button type="button" class="rename-btn" id="rename-btn" title="Rename this chat">✎</button>
+        </div>
+        <div class="header-actions">
+          <span class="working-pill hidden" id="working-pill" title="Agent turn in progress"><span class="work-pulse"></span><span id="working-pill-text">Working</span></span>
+          <button type="button" class="pill-btn model-pill" id="model-btn" title="Switch AGY / Claude model &amp; effort">AGY · NEON · low ▾</button>
+          <button type="button" class="icon-btn" id="new-chat-btn" title="Start a fresh chat on this tab">+</button>
+          <button type="button" class="icon-btn close-chat-btn" id="close-chat-btn" title="Close this chat: stops it and takes it off this tab (history kept, ⌘K brings it back)">⏻</button>
+        </div>
+      </div>
+
+      <div class="topbar-row row-context">
+        <button type="button" class="repo-pill" id="repo-btn" title="View URL → Repo link or pin rule">
+          <span class="url-host" id="url-host">no tab</span>
+          <span class="arrow">→</span>
+          <span class="repo-name" id="repo-name">Browser Scratch</span>
+          <span class="caret">▾</span>
+        </button>
+
+        <div class="inspect-group">
+          <button type="button" class="relay-mode-btn hidden" id="relay-mode-btn" title="Pigeon-Hole relay mode: Ask (review before sending) or Auto-Queue (queue directly when cubby is working)">Relay: Ask</button>
+          <button type="button" class="inspect-btn off" id="inspect-btn" title="Toggle live page &amp; DevTools access (⌘.)">
+            <span class="inspect-dot"></span>
+            <span id="inspect-label">See Page</span>
+          </button>
+          <button type="button" class="pick-btn hidden" id="pick-btn" title="Click an element on the page to attach it as a chip">⌖ Pick</button>
+        </div>
+      </div>
+
+      <!-- Live CDP telemetry bar (only visible when See Page is ON) -->
+      <div class="cdp-bar hidden" id="cdp-bar">
+        <span class="cdp-stat" id="cdp-stat-text">CDP attached · watching console &amp; network</span>
+        <button type="button" class="link-btn" id="cdp-detach-btn">Detach</button>
+      </div>
+    </header>
+
+    <!-- Contextual Banners -->
+    <div class="banner-stack" id="banner-stack">
+      <div class="banner banner-offline hidden" id="offline-banner">
+        <span>Daemon offline on <code>127.0.0.1:7752</code> — run <code>bin/tab-agent start</code></span>
+        <button type="button" class="sm-btn" id="retry-btn">Retry</button>
+      </div>
+
+      <div class="radar-bar hidden" id="radar-bar" aria-live="polite"></div>
+
+      <div class="after-banner hidden" id="after-banner" aria-live="polite"></div>
+
+      <div class="banner banner-pigeon hidden" id="pigeon-repo-banner">
+        <span id="pigeon-repo-text">Cubby repo: <strong>Repo</strong></span>
+        <div class="banner-btns">
+          <button type="button" class="sm-btn primary" id="pigeon-repo-switch">Switch repo</button>
+          <button type="button" class="sm-btn" id="pigeon-repo-dismiss">Dismiss</button>
+        </div>
+      </div>
+
+      <div class="banner banner-suggest hidden" id="repo-suggest-banner">
+        <span id="repo-suggest-text">Suggested repo: <strong>Repo</strong></span>
+        <div class="banner-btns">
+          <button type="button" class="sm-btn primary" id="repo-suggest-pin">Use &amp; Pin</button>
+          <button type="button" class="sm-btn" id="repo-suggest-dismiss">Dismiss</button>
+        </div>
+      </div>
+
+      <div class="banner banner-recover hidden" id="recover-banner">
+        <div class="recover-copy">
+          <strong id="recover-title">Previous chat for this domain</strong>
+          <span id="recover-meta"></span>
+        </div>
+        <div class="banner-btns">
+          <button type="button" class="sm-btn primary" id="recover-resume-btn">Resume</button>
+          <button type="button" class="sm-btn" id="recover-dismiss-btn">New</button>
+        </div>
+      </div>
+
+      <div class="banner banner-nav hidden" id="domain-changed-banner">
+        <span id="domain-changed-text">Tab navigated to a new domain — chat stays attached.</span>
+        <div class="banner-btns">
+          <button type="button" class="sm-btn" id="domain-new-btn">New Chat</button>
+          <button type="button" class="sm-btn" id="domain-dismiss-btn">Keep</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Chat Stream -->
+    <main class="chat-scroll" id="chat-scroll">
+      <div class="empty-state" id="empty-state">
+        <div class="empty-badge" id="empty-tab-badge">Tab ready</div>
+        <h2>Sticky CLI chat for this tab</h2>
+        <p id="empty-desc">
+          Passive URL tracking is active. Send your first message to bind an <strong>AGY</strong> or <strong>Claude Code</strong> session to this tab — or click <strong>See Page</strong> to share live DOM, console, and network logs.
+        </p>
+        <button type="button" class="sm-btn" id="empty-pick-btn">Pick a chat ▾</button>
+        <div class="empty-hints">
+          <span><code>Shift+Enter</code> send</span>
+          <span><code>⌘K</code> switch chat</span>
+          <span><code>⌘.</code> See Page</span>
+        </div>
+      </div>
+
+      <div class="messages" id="messages"></div>
+
+      <!-- Quiet Collapsible Tool / Harness Drawer -->
+      <details class="events-drawer hidden" id="events-drawer">
+        <summary class="events-summary">
+          <span id="events-summary-label">Harness &amp; tool activity</span>
+          <span class="events-count" id="events-count">0</span>
+        </summary>
+        <ul class="events-list" id="events-list"></ul>
+      </details>
+    </main>
+
+    <!-- Compose Dock -->
+    <footer class="compose">
+      <div class="attachments-tray hidden" id="attachments-tray" aria-live="polite"></div>
+      <div class="chips-bar hidden" id="chips-bar"></div>
+      <div class="compose-box">
+        <textarea
+          id="prompt-input"
+          rows="2"
+          placeholder="Message agent… (paste or drop screenshots, Shift+Enter to send)"
+          aria-label="Prompt input"
+        ></textarea>
+      </div>
+      <div class="compose-foot">
+        <div class="foot-left">
+          <button type="button" class="sm-btn" id="attach-btn" title="Attach image file (or paste ⌘V / drag &amp; drop)">+ Img</button>
+          <button type="button" class="sm-btn pin-note-btn" id="pin-note-btn" title="Pin numbered notes &amp; element crops directly on the live page (no See Page needed)">⌖ Pin</button>
+          <input type="file" id="attach-file-input" class="hidden" accept="image/*" multiple />
+          <span class="foot-hint" id="foot-hint">Shift+Enter · ⌘V</span>
+        </div>
+        <div class="foot-actions">
+          <button type="button" class="sm-btn danger hidden" id="stop-btn">Stop</button>
+          <button type="button" class="sm-btn primary" id="send-btn">Send</button>
+        </div>
+      </div>
+    </footer>
+
+    <!-- Drag & Drop Overlay -->
+    <div class="drop-overlay hidden" id="drop-overlay" aria-hidden="true">
+      <div class="drop-card">
+        <strong>Drop image or screenshot</strong>
+        <span>PNG, JPG, WebP, TIFF &amp; HEIC supported</span>
+      </div>
+    </div>
+
+    <!-- Image Lightbox -->
+    <div class="lightbox hidden" id="image-lightbox" role="dialog" aria-label="Image preview">
+      <img id="lightbox-img" alt="Attachment preview" />
+      <div class="lightbox-bar">
+        <span id="lightbox-name"></span>
+        <button type="button" class="sm-btn" id="lightbox-close">Esc Close</button>
+      </div>
+    </div>
+
+    <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
+
+    <!-- Popover: Model & Effort Picker -->
+    <div class="popover hidden" id="model-popover" role="dialog" aria-label="Model and effort picker">
+      <div class="pop-head">
+        <strong>Harness &amp; Effort</strong>
+        <button type="button" class="pop-close" data-close="model-popover">×</button>
+      </div>
+      <div class="pop-section">
+        <div class="pop-label">Model</div>
+        <div class="model-list" id="model-list"></div>
+      </div>
+      <div class="pop-section">
+        <div class="pop-label">Thinking Effort</div>
+        <div class="effort-row" id="effort-row"></div>
+      </div>
+    </div>
+
+    <!-- Popover: Repo & URL Rule Picker -->
+    <div class="popover hidden" id="repo-popover" role="dialog" aria-label="Link repository">
+      <div class="pop-head">
+        <strong>Link Repo to URL / Tab</strong>
+        <button type="button" class="pop-close" data-close="repo-popover">×</button>
+      </div>
+      <div class="pop-section">
+        <div class="pop-label">Current URL</div>
+        <div class="mono-box" id="repo-pop-url">—</div>
+      </div>
+      <div class="pop-section">
+        <div class="pop-label">Search Local Repos</div>
+        <input type="search" class="pop-input" id="repo-search-input" placeholder="Search local repos (e.g. acme-web, api-server)…" />
+        <div class="repo-results" id="repo-results"></div>
+      </div>
+      <div class="pop-section">
+        <div class="pop-label">Pinned URL → Repo Rules</div>
+        <div class="rules-list" id="rules-list"></div>
+      </div>
+    </div>
+
+    <!-- Chat switcher (⌘K or click the chat title): search, move a chat here, go to it, send this chat on -->
+    <div class="switcher hidden" id="switcher" role="dialog" aria-label="Switch chat">
+      <div class="sw-search">
+        <span class="sw-glyph">⌕</span>
+        <input type="text" id="switcher-input" placeholder="Search chats, sites, folders, messages…" autocomplete="off" spellcheck="false" />
+        <kbd>esc</kbd>
+      </div>
+      <div class="sw-list" id="switcher-list"></div>
+      <div class="sw-foot">
+        <div class="sw-sendto" id="switcher-sendto"></div>
+        <div class="sw-keys"><span><kbd>↑↓</kbd> pick</span><span><kbd>↵</kbd> move here</span><span><kbd>⌘↵</kbd> go to it</span></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="format.js"></script>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

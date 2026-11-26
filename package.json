@@ -1,0 +1,20 @@
+{
+  "name": "tab-agent",
+  "version": "0.3.0",
+  "description": "Chrome MV3 side-panel extension + local Bun daemon that pins persistent Claude Code & Antigravity CLI sessions to individual browser tabs.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Samuel-Tucker/tab-agent.git"
+  },
+  "private": false,
+  "type": "module",
+  "scripts": {
+    "start": "bun run daemon/server.ts",
+    "test": "bun test tests/",
+    "ui-check": "bun scripts/ui-check.ts"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.0"
+  }
+}

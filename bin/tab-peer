@@ -1,0 +1,164 @@
+#!/usr/bin/env bun
+/**
+ * Peer-to-peer CLI for Tab-Agent sessions (works in AGY, Claude Code, or any shell).
+ * Uses TAB_AGENT_PORT, TAB_AGENT_TOKEN, TAB_AGENT_SESSION, TAB_AGENT_PEER_DEPTH from env.
+ *
+ * Usage:
+ *   tab-peer list [query] [--json]
+ *   tab-peer read <repo-or-session> [--last 8] [--json]
+ *   tab-peer send <repo-or-session> "<message>" [--no-wait] [--timeout 120] [--json]
+ */
+
+const PORT = Number(process.env.TAB_AGENT_PORT || 7752);
+const TOKEN = process.env.TAB_AGENT_TOKEN || "";
+const SESSION_ID = process.env.TAB_AGENT_SESSION || "";
+const PEER_DEPTH = Number(process.env.TAB_AGENT_PEER_DEPTH || 0);
+const BASE = `http://127.0.0.1:${PORT}`;
+
+function headers(extra: Record<string, string> = {}): Record<string, string> {
+  return {
+    ...(TOKEN ? { "X-Tab-Agent-Token": TOKEN } : {}),
+    ...extra,
+  };
+}
+
+const argv = process.argv.slice(2);
+const cmd = (argv[0] || "list").toLowerCase();
+const wantsJson = argv.includes("--json");
+
+function flagVal(name: string): string | undefined {
+  const idx = argv.indexOf(name);
+  if (idx !== -1 && argv[idx + 1] && !argv[idx + 1].startsWith("--")) return argv[idx + 1];
+  const eq = argv.find((a) => a.startsWith(`${name}=`));
+  return eq ? eq.slice(name.length + 1) : undefined;
+}
+
+const positional = argv.slice(1).filter((a, i, arr) => {
+  if (a.startsWith("--")) return false;
+  const prev = arr[i - 1];
+  if (prev === "--last" || prev === "--timeout") return false;
+  return true;
+});
+
+async function main() {
+  if (cmd === "list" || cmd === "ls") {
+    const q = positional.join(" ").trim();
+    const qs = new URLSearchParams();
+    if (q) qs.set("query", q);
+    if (SESSION_ID) qs.set("excludeSessionId", SESSION_ID);
+    const res = await fetch(`${BASE}/api/peers?${qs.toString()}`, { headers: headers() });
+    const data = (await res.json()) as any;
+    if (!res.ok) {
+      console.error(data.error || `Failed (${res.status})`);
+      process.exit(1);
+    }
+    if (wantsJson) {
+      console.log(JSON.stringify(data, null, 2));
+      return;
+    }
+    const peers = Array.isArray(data.peers) ? data.peers : [];
+    if (peers.length === 0) {
+      console.log(q ? `No peer sessions matching "${q}".` : "No other active Tab-Agent sessions.");
+      return;
+    }
+    for (const p of peers) {
+      const tag = p.kind === "pigeon" ? "PIGEON" : p.bound ? "OPEN TAB" : "ARCHIVED";
+      console.log(
+        `[${tag}] ${p.repoName} — "${p.name}" (id: ${p.id}, state: ${p.state}, model: ${p.family}${p.model ? "·" + p.model : ""})`
+      );
+      if (p.url) console.log(`  url: ${p.url}`);
+      if (p.lastReply) console.log(`  last: ${p.lastReply.slice(0, 120)}`);
+    }
+    return;
+  }
+
+  if (cmd === "read") {
+    const target = positional[0];
+    if (!target) {
+      console.error("Usage: tab-peer read <repo-or-session> [--last 8]");
+      process.exit(1);
+    }
+    const last = Number(flagVal("--last") || 8);
+    const qs = new URLSearchParams({ target, last: String(last) });
+    if (SESSION_ID) qs.set("excludeSessionId", SESSION_ID);
+    const res = await fetch(`${BASE}/api/peers/read?${qs.toString()}`, { headers: headers() });
+    const data = (await res.json()) as any;
+    if (!res.ok || !data.ok) {
+      console.error(data.error || `Failed (${res.status})`);
+      if (Array.isArray(data.candidates) && data.candidates.length) {
+        console.error("Available peers:", data.candidates.map((c: any) => `${c.repoName} (${c.id})`).join(", "));
+      }
+      process.exit(1);
+    }
+    if (wantsJson) {
+      console.log(JSON.stringify(data, null, 2));
+      return;
+    }
+    const p = data.peer;
+    console.log(`Peer: ${p.repoName} — "${p.name}" (${p.id}, ${p.state})`);
+    console.log(`Repo: ${p.displayRepoPath}${p.url ? ` | URL: ${p.url}` : ""}`);
+    console.log("--- Recent Messages ---");
+    for (const m of data.messages || []) {
+      console.log(`[${m.time || ""}] ${String(m.sender || "").toUpperCase()}: ${m.text}`);
+    }
+    return;
+  }
+
+  if (cmd === "send" || cmd === "ask") {
+    const target = positional[0];
+    const message = positional.slice(1).join(" ").trim();
+    if (!target || !message) {
+      console.error('Usage: tab-peer send <repo-or-session> "<message>" [--no-wait] [--timeout 120]');
+      process.exit(1);
+    }
+    const wait = !argv.includes("--no-wait");
+    const timeoutSec = Number(flagVal("--timeout") || 120);
+    const res = await fetch(`${BASE}/api/peers/send`, {
+      method: "POST",
+      headers: headers({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        fromSessionId: SESSION_ID || undefined,
+        target,
+        message,
+        wait,
+        timeoutMs: Math.round(timeoutSec * 1000),
+        depth: PEER_DEPTH,
+      }),
+    });
+    const data = (await res.json()) as any;
+    if (!res.ok || !data.ok) {
+      console.error(data.error || `Peer send failed (${res.status})`);
+      if (Array.isArray(data.candidates) && data.candidates.length) {
+        console.error("Available peers:", data.candidates.map((c: any) => `${c.repoName} (${c.id})`).join(", "));
+      }
+      process.exit(1);
+    }
+    if (wantsJson) {
+      console.log(JSON.stringify(data, null, 2));
+      return;
+    }
+    const p = data.peer;
+    if (data.timedOut) {
+      console.log(`[Timed out waiting for ${p?.repoName}] ${data.note || ""}`);
+      return;
+    }
+    if (!wait) {
+      console.log(`Sent to ${p?.repoName} (${p?.id}).`);
+      return;
+    }
+    if (data.relayed) {
+      console.log(`Relayed to Pigeon-Hole cubby ${p?.name}:`, JSON.stringify(data.relayed));
+      return;
+    }
+    console.log(`[Reply from ${p?.repoName} ("${p?.name}")]\n\n${data.reply || "(empty reply)"}`);
+    return;
+  }
+
+  console.error("Usage: tab-peer {list|read|send} ...");
+  process.exit(1);
+}
+
+main().catch((err) => {
+  console.error(`tab-peer error: ${err?.message || err}`);
+  process.exit(1);
+});
